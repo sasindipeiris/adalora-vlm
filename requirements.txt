@@ -1,0 +1,13 @@
+torch>=2.3
+transformers>=4.46
+peft>=0.14
+datasets>=2.19
+huggingface_hub
+fsspec
+pyarrow
+Pillow
+num2words
+numpy
+scipy
+matplotlib
+tqdm
