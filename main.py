@@ -6,6 +6,7 @@
 
 All settings live in configs/config.yaml (pass --config to use another file).
 """
+
 import argparse
 import json
 import os
@@ -16,6 +17,7 @@ import yaml
 METHODS = ("zeroshot", "lora", "adalora")
 PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_CONFIG = os.path.join(PROJECT_DIR, "configs", "config.yaml")
+
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -44,8 +46,11 @@ def load_config(path):
     paths = cfg["paths"]
     root = _resolve(paths.get("storage_root") or "adalora_vlm")
     paths["storage_root"] = root
-    defaults = {"hf_home": "hf_cache", "output_root": "runs",
-                "subset_dir": os.path.join("data", "docvqa_subset")}
+    defaults = {
+        "hf_home": "hf_cache",
+        "output_root": "runs",
+        "subset_dir": os.path.join("data", "docvqa_subset"),
+    }
     for key, sub in defaults.items():
         paths[key] = _resolve(paths[key]) if paths.get(key) else os.path.join(root, sub)
     return cfg
@@ -74,27 +79,48 @@ def run_method(method, cfg):
     precision, amp_dtype = resolve_precision(train_cfg["precision"])
 
     train_ds, val_ds, processor, train_collator, eval_collator = prepare_docvqa_dataset(
-        model_id=cfg["model"]["model_id"], subset_dir=paths["subset_dir"], seed=seed, **cfg["data"])
+        model_id=cfg["model"]["model_id"],
+        subset_dir=paths["subset_dir"],
+        seed=seed,
+        **cfg["data"],
+    )
 
     model = load_base_model(**cfg["model"])
 
-    results = {"method": method, "seed": seed, "n_train": len(train_ds),
-               "n_val": len(val_ds), "precision": precision}
+    results = {
+        "method": method,
+        "seed": seed,
+        "n_train": len(train_ds),
+        "n_val": len(val_ds),
+        "precision": precision,
+    }
     start = time.time()
 
     if method != "zeroshot":
-        total_steps = compute_total_steps(len(train_ds), train_cfg["batch_size"],
-                                          train_cfg["grad_accum"], train_cfg["epochs"])
+        total_steps = compute_total_steps(
+            len(train_ds),
+            train_cfg["batch_size"],
+            train_cfg["grad_accum"],
+            train_cfg["epochs"],
+        )
         if method == "lora":
             model = build_lora_model(model, **cfg["lora"])
         else:
             model = build_adalora_model(model, total_step=total_steps, **cfg["adalora"])
         trainable, total = count_parameters(model)
-        print(f"Trainable params: {trainable:,} / {total:,} ({100 * trainable / total:.2f}%)")
-        results.update(trainable_params=trainable, total_params=total, total_steps=total_steps)
+        print(
+            f"Trainable params: {trainable:,} / {total:,} ({100 * trainable / total:.2f}%)"
+        )
+        results.update(
+            trainable_params=trainable, total_params=total, total_steps=total_steps
+        )
 
-        model, allocation = train(model, train_ds, train_collator,
-                                  TrainConfig(output_dir=out_dir, seed=seed, **train_cfg))
+        model, allocation = train(
+            model,
+            train_ds,
+            train_collator,
+            TrainConfig(output_dir=out_dir, seed=seed, **train_cfg),
+        )
         results["allocation_summary"] = allocation_summary(allocation)
         results["train_time_s"] = round(time.time() - start, 1)
     else:
@@ -102,8 +128,14 @@ def run_method(method, cfg):
 
     model.config.use_cache = True
     mean_anls, predictions = evaluate_anls(
-        model, val_ds, eval_collator, processor, amp_dtype=amp_dtype,
-        num_workers=train_cfg["num_workers"], **cfg["eval"])
+        model,
+        val_ds,
+        eval_collator,
+        processor,
+        amp_dtype=amp_dtype,
+        num_workers=train_cfg["num_workers"],
+        **cfg["eval"],
+    )
     results["anls"] = mean_anls
     results["total_time_s"] = round(time.time() - start, 1)
 
@@ -124,6 +156,7 @@ def main():
 
     if args.compare:
         from evaluation.compare import compare
+
         compare(cfg["paths"]["output_root"], cfg["seed"], METHODS)
     else:
         run_method(args.method, cfg)

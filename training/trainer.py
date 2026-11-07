@@ -10,13 +10,21 @@ from tqdm.auto import tqdm
 from transformers import get_linear_schedule_with_warmup, set_seed
 
 from models.utils import get_rank_allocation
-from training.utils import (append_jsonl, compute_total_steps, epoch_order, is_adalora,
-                            load_checkpoint, resolve_precision, save_checkpoint)
+from training.utils import (
+    append_jsonl,
+    compute_total_steps,
+    epoch_order,
+    is_adalora,
+    load_checkpoint,
+    resolve_precision,
+    save_checkpoint,
+)
 
 
 @dataclass
 class TrainConfig:
     """Built from the `train:` section of configs/config.yaml plus the run's output_dir and seed."""
+
     output_dir: str
     seed: int
     epochs: int
@@ -26,11 +34,11 @@ class TrainConfig:
     weight_decay: float
     warmup_ratio: float
     max_grad_norm: float
-    precision: str                  # auto | bf16 | fp16 | fp32
+    precision: str  # auto | bf16 | fp16 | fp32
     num_workers: int
-    log_every: int                  # optimizer steps
-    save_every: int                 # optimizer steps
-    alloc_log_every: int            # optimizer steps; must be a multiple of AdaLoRA deltaT
+    log_every: int  # optimizer steps
+    save_every: int  # optimizer steps
+    alloc_log_every: int  # optimizer steps; must be a multiple of AdaLoRA deltaT
 
 
 def train(model, train_dataset, collator, cfg):
@@ -54,18 +62,25 @@ def train(model, train_dataset, collator, cfg):
     model.config.use_cache = False
 
     batches_per_epoch = math.ceil(len(train_dataset) / cfg.batch_size)
-    total_steps = compute_total_steps(len(train_dataset), cfg.batch_size, cfg.grad_accum, cfg.epochs)
+    total_steps = compute_total_steps(
+        len(train_dataset), cfg.batch_size, cfg.grad_accum, cfg.epochs
+    )
     if adalora:
         peft_cfg = model.peft_config["default"]
         if peft_cfg.total_step != total_steps:
-            raise ValueError(f"AdaLoRA total_step={peft_cfg.total_step} but trainer runs {total_steps}")
+            raise ValueError(
+                f"AdaLoRA total_step={peft_cfg.total_step} but trainer runs {total_steps}"
+            )
         if cfg.alloc_log_every % peft_cfg.deltaT != 0:
-            raise ValueError("alloc_log_every must be a multiple of deltaT (ranks are only masked then)")
+            raise ValueError(
+                "alloc_log_every must be a multiple of deltaT (ranks are only masked then)"
+            )
 
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(params, lr=cfg.lr, weight_decay=cfg.weight_decay)
     scheduler = get_linear_schedule_with_warmup(
-        optimizer, int(cfg.warmup_ratio * total_steps), total_steps)
+        optimizer, int(cfg.warmup_ratio * total_steps), total_steps
+    )
     scaler = torch.amp.GradScaler("cuda", enabled=(precision == "fp16"))
 
     ckpt_dir = os.path.join(cfg.output_dir, "checkpoint")
@@ -75,8 +90,16 @@ def train(model, train_dataset, collator, cfg):
         print(f"Resumed from step {state['global_step']}")
     else:
         with open(os.path.join(cfg.output_dir, "train_config.json"), "w") as f:
-            json.dump({**asdict(cfg), "precision": precision, "total_steps": total_steps,
-                       "method": "adalora" if adalora else "lora"}, f, indent=2)
+            json.dump(
+                {
+                    **asdict(cfg),
+                    "precision": precision,
+                    "total_steps": total_steps,
+                    "method": "adalora" if adalora else "lora",
+                },
+                f,
+                indent=2,
+            )
         if adalora:
             names = [row["name"] for row in get_rank_allocation(model)]
             with open(os.path.join(cfg.output_dir, "rank_modules.json"), "w") as f:
@@ -91,9 +114,17 @@ def train(model, train_dataset, collator, cfg):
 
     for epoch in range(state["epoch"], cfg.epochs):
         first_batch = state["batch_in_epoch"] if epoch == state["epoch"] else 0
-        order = epoch_order(len(train_dataset), cfg.seed, epoch)[first_batch * cfg.batch_size:]
-        loader = DataLoader(train_dataset, batch_size=cfg.batch_size, sampler=order,
-                            collate_fn=collator, num_workers=cfg.num_workers, pin_memory=True)
+        order = epoch_order(len(train_dataset), cfg.seed, epoch)[
+            first_batch * cfg.batch_size :
+        ]
+        loader = DataLoader(
+            train_dataset,
+            batch_size=cfg.batch_size,
+            sampler=order,
+            collate_fn=collator,
+            num_workers=cfg.num_workers,
+            pin_memory=True,
+        )
 
         batch_idx = first_batch
         for batch in loader:
@@ -102,7 +133,9 @@ def train(model, train_dataset, collator, cfg):
             group_size = min(cfg.grad_accum, batches_per_epoch - group_start)
 
             batch = {k: v.to(device, non_blocking=True) for k, v in batch.items()}
-            with torch.autocast(device.type, dtype=amp_dtype, enabled=amp_dtype is not None):
+            with torch.autocast(
+                device.type, dtype=amp_dtype, enabled=amp_dtype is not None
+            ):
                 # For AdaLoRA, PEFT adds the orthogonality regulariser to this loss.
                 loss = model(**batch).loss / group_size
             scaler.scale(loss).backward()
@@ -143,10 +176,13 @@ def train(model, train_dataset, collator, cfg):
             progress.update(1)
 
             if state["global_step"] % cfg.log_every == 0:
-                record = {"step": state["global_step"], "epoch": epoch,
-                          "loss": running_loss / running_steps,
-                          "lr": scheduler.get_last_lr()[0],
-                          "elapsed_s": round(time.time() - start_time, 1)}
+                record = {
+                    "step": state["global_step"],
+                    "epoch": epoch,
+                    "loss": running_loss / running_steps,
+                    "lr": scheduler.get_last_lr()[0],
+                    "elapsed_s": round(time.time() - start_time, 1),
+                }
                 append_jsonl(log_path, record)
                 progress.set_postfix(loss=f"{record['loss']:.4f}")
                 running_loss, running_steps = 0.0, 0
@@ -160,7 +196,10 @@ def train(model, train_dataset, collator, cfg):
 
     allocation = get_rank_allocation(model)
     if adalora:
-        append_jsonl(history_path, {"step": total_steps, "ranks": [r["rank"] for r in allocation]})
+        append_jsonl(
+            history_path,
+            {"step": total_steps, "ranks": [r["rank"] for r in allocation]},
+        )
     with open(os.path.join(cfg.output_dir, "rank_allocation.json"), "w") as f:
         json.dump(allocation, f, indent=2)
     model.save_pretrained(os.path.join(cfg.output_dir, "adapter"))

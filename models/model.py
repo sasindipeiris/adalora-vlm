@@ -8,15 +8,20 @@ except ImportError:  # older transformers
 
 from models.utils import find_target_modules
 
-DTYPES = {"float32": torch.float32, "bfloat16": torch.bfloat16, "float16": torch.float16}
+DTYPES = {
+    "float32": torch.float32,
+    "bfloat16": torch.bfloat16,
+    "float16": torch.float16,
+}
 
 
 def load_base_model(model_id, dtype, attn_implementation):
     """`dtype` is a name from DTYPES. fp32 master weights keep fp16 autocast + GradScaler safe on a T4."""
     if dtype not in DTYPES:
         raise ValueError(f"model.dtype must be one of {list(DTYPES)}, got {dtype!r}")
-    return AutoVLM.from_pretrained(model_id, torch_dtype=DTYPES[dtype],
-                                   attn_implementation=attn_implementation)
+    return AutoVLM.from_pretrained(
+        model_id, torch_dtype=DTYPES[dtype], attn_implementation=attn_implementation
+    )
 
 
 def build_lora_model(base_model, r, alpha, dropout):
@@ -31,8 +36,20 @@ def build_lora_model(base_model, r, alpha, dropout):
     return get_peft_model(base_model, config)
 
 
-def build_adalora_model(base_model, total_step, init_r, target_r, tinit_frac, tfinal_frac,
-                        deltaT, beta1, beta2, orth_reg_weight, alpha, dropout):
+def build_adalora_model(
+    base_model,
+    total_step,
+    init_r,
+    target_r,
+    tinit_frac,
+    tfinal_frac,
+    deltaT,
+    beta1,
+    beta2,
+    orth_reg_weight,
+    alpha,
+    dropout,
+):
     """
     Experiment 2: AdaLoRA. Every module starts at rank `init_r`; the total budget
     is pruned to an average of `target_r` per module (same budget as LoRA r=target_r).
@@ -48,7 +65,9 @@ def build_adalora_model(base_model, total_step, init_r, target_r, tinit_frac, tf
     tinit = int(tinit_frac * total_step)
     tfinal = int(tfinal_frac * total_step)
     if tinit + tfinal >= total_step:
-        raise ValueError("tinit + tfinal must leave a budgeting phase before total_step")
+        raise ValueError(
+            "tinit + tfinal must leave a budgeting phase before total_step"
+        )
 
     config = AdaLoraConfig(
         init_r=init_r,

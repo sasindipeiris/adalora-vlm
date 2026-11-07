@@ -32,7 +32,9 @@ def epoch_order(n, seed, epoch):
 def save_checkpoint(path, model, optimizer, scheduler, scaler, state):
     os.makedirs(path, exist_ok=True)
     payload = {
-        "trainable": {n: p.detach().cpu() for n, p in model.named_parameters() if p.requires_grad},
+        "trainable": {
+            n: p.detach().cpu() for n, p in model.named_parameters() if p.requires_grad
+        },
         "optimizer": optimizer.state_dict(),
         "scheduler": scheduler.state_dict(),
         "scaler": scaler.state_dict(),
@@ -41,16 +43,21 @@ def save_checkpoint(path, model, optimizer, scheduler, scaler, state):
     if is_adalora(model):
         # Importance EMAs drive the allocation; without them a resume restarts the scoring.
         allocator = model.base_model.rankallocator
-        payload["rankallocator"] = {k: getattr(allocator, k)
-                                    for k in ("ipt", "exp_avg_ipt", "exp_avg_unc")}
+        payload["rankallocator"] = {
+            k: getattr(allocator, k) for k in ("ipt", "exp_avg_ipt", "exp_avg_unc")
+        }
         payload["rank_pattern"] = model.peft_config["default"].rank_pattern
     tmp = os.path.join(path, "state.pt.tmp")
     torch.save(payload, tmp)
-    os.replace(tmp, os.path.join(path, "state.pt"))  # atomic: a disconnect never leaves a half file
+    os.replace(
+        tmp, os.path.join(path, "state.pt")
+    )  # atomic: a disconnect never leaves a half file
 
 
 def load_checkpoint(path, model, optimizer, scheduler, scaler, device):
-    payload = torch.load(os.path.join(path, "state.pt"), map_location=device, weights_only=False)
+    payload = torch.load(
+        os.path.join(path, "state.pt"), map_location=device, weights_only=False
+    )
     model.load_state_dict(payload["trainable"], strict=False)
     optimizer.load_state_dict(payload["optimizer"])
     scheduler.load_state_dict(payload["scheduler"])
