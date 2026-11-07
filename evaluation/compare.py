@@ -5,12 +5,8 @@ from evaluation.utils import (METHOD_LABEL, plot_anls, plot_budget_ratio, plot_d
                               plot_matrix_types, plot_rank_heatmap, plot_ratio_history,
                               tower_share_history)
 
-METHODS = ("zeroshot", "lora", "adalora")
-
-
-def run_dir(output_root, method, seed, debug=False):
-    suffix = "_debug" if debug else ""
-    return os.path.join(output_root, f"{method}_seed{seed}{suffix}")
+def run_dir(output_root, method, seed):
+    return os.path.join(output_root, f"{method}_seed{seed}")
 
 
 def _fmt(value, digits=3):
@@ -39,18 +35,18 @@ def _table(results):
     return "\n".join(lines)
 
 
-def compare(output_root, seed, debug=False):
+def compare(output_root, seed, methods):
     """Build the comparison table and figures from whichever runs exist."""
     results = {}
-    for method in METHODS:
-        path = os.path.join(run_dir(output_root, method, seed, debug), "results.json")
+    for method in methods:
+        path = os.path.join(run_dir(output_root, method, seed), "results.json")
         if os.path.exists(path):
             with open(path) as f:
                 results[method] = json.load(f)
     if not results:
         raise SystemExit(f"No results.json found under {output_root}")
 
-    out_dir = os.path.join(output_root, f"compare_seed{seed}" + ("_debug" if debug else ""))
+    out_dir = os.path.join(output_root, f"compare_seed{seed}")
     fig_dir = os.path.join(out_dir, "figures")
     os.makedirs(fig_dir, exist_ok=True)
 
@@ -61,7 +57,7 @@ def compare(output_root, seed, debug=False):
         plot_budget_ratio(summaries, os.path.join(fig_dir, "budget_ratio.png"))
 
     if "adalora" in results:
-        ada_dir = run_dir(output_root, "adalora", seed, debug)
+        ada_dir = run_dir(output_root, "adalora", seed)
         with open(os.path.join(ada_dir, "rank_allocation.json")) as f:
             rows = json.load(f)
         plot_rank_heatmap(rows, os.path.join(fig_dir, "adalora_rank_heatmap.png"),

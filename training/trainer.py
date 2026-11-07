@@ -16,20 +16,21 @@ from training.utils import (append_jsonl, compute_total_steps, epoch_order, is_a
 
 @dataclass
 class TrainConfig:
-    output_dir: str                 # e.g. /mnt/ext_drive/sasindi_rs/adalora_vlm/runs/adalora_seed42
-    epochs: int = 3
-    batch_size: int = 2
-    grad_accum: int = 8             # effective batch = 16
-    lr: float = 2e-4
-    weight_decay: float = 0.0
-    warmup_ratio: float = 0.05
-    max_grad_norm: float = 1.0
-    precision: str = "auto"         # auto -> bf16 if supported (3090) else fp16 (T4); or "fp32"
-    num_workers: int = 4
-    seed: int = 42
-    log_every: int = 10             # optimizer steps
-    alloc_log_every: int = 20       # optimizer steps; must be a multiple of AdaLoRA deltaT
-    save_every: int = 100           # optimizer steps
+    """Built from the `train:` section of configs/config.yaml plus the run's output_dir and seed."""
+    output_dir: str
+    seed: int
+    epochs: int
+    batch_size: int
+    grad_accum: int
+    lr: float
+    weight_decay: float
+    warmup_ratio: float
+    max_grad_norm: float
+    precision: str                  # auto | bf16 | fp16 | fp32
+    num_workers: int
+    log_every: int                  # optimizer steps
+    save_every: int                 # optimizer steps
+    alloc_log_every: int            # optimizer steps; must be a multiple of AdaLoRA deltaT
 
 
 def train(model, train_dataset, collator, cfg):

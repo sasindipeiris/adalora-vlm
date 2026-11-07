@@ -4,9 +4,7 @@ from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 
-# --------------------------------------------------------------------------- #
 # Accuracy: ANLS (official DocVQA metric)
-# --------------------------------------------------------------------------- #
 
 def _normalize(text):
     return " ".join(text.lower().strip().split())
@@ -24,7 +22,7 @@ def _levenshtein(a, b):
     return previous[-1]
 
 
-def anls(prediction, answers, threshold=0.5):
+def anls(prediction, answers, threshold):
     """Best 1 - normalised edit distance over all references; 0 if above `threshold`."""
     pred = _normalize(prediction)
     best = 0.0
@@ -38,8 +36,8 @@ def anls(prediction, answers, threshold=0.5):
 
 
 @torch.no_grad()
-def evaluate_anls(model, dataset, collator, processor, batch_size=8, max_new_tokens=32,
-                  amp_dtype=None, num_workers=4):
+def evaluate_anls(model, dataset, collator, processor, batch_size, max_new_tokens,
+                  anls_threshold, amp_dtype, num_workers):
     """
     Greedy-decode every validation example and score it with ANLS.
     Returns (mean_anls, predictions) where predictions keep question ids for failure analysis.
@@ -67,7 +65,7 @@ def evaluate_anls(model, dataset, collator, processor, batch_size=8, max_new_tok
         for qid, text, refs in zip(question_ids, texts, answers):
             text = text.strip()
             predictions.append({"question_id": int(qid), "prediction": text,
-                                "answers": list(refs), "anls": anls(text, refs)})
+                                "answers": list(refs), "anls": anls(text, refs, anls_threshold)})
 
     mean = float(np.mean([p["anls"] for p in predictions])) if predictions else 0.0
     return mean, predictions

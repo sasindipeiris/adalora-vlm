@@ -1,10 +1,4 @@
-
-
 import os
-
-STORAGE_ROOT = "/mnt/ext_drive/sasindi_rs/adalora_vlm"
-os.environ.setdefault("HF_HOME", os.path.join(STORAGE_ROOT, "hf_cache"))
-
 import random
 import shutil
 from collections import defaultdict
@@ -16,14 +10,7 @@ from huggingface_hub import HfFileSystem
 from tqdm.auto import tqdm
 from transformers import AutoProcessor
 
-MODEL_ID = "HuggingFaceTB/SmolVLM-256M-Instruct"
-DATASET_ID = "HuggingFaceM4/DocumentVQA"
-SUBSET_DIR = os.path.join(STORAGE_ROOT, "data", "docvqa_subset")
-
 KEEP_COLUMNS = ["questionId", "question", "answers", "image"]
-# Standard DocVQA instruction: asks for the short answer format ANLS scores against.
-# Used identically in training and evaluation.
-ANSWER_INSTRUCTION = "Answer the question using a single word or phrase."
 SUBSET_FEATURES = Features({
     "questionId": Value("int32"),
     "question": Value("string"),
@@ -32,7 +19,7 @@ SUBSET_FEATURES = Features({
 })
 
 
-def _plan_subset(split, n, seed, rows_per_group):
+def _plan_subset(dataset_id, split, n, seed, rows_per_group):
     """
     Decide which rows to take, from parquet metadata only (no images downloaded).
 
@@ -42,13 +29,13 @@ def _plan_subset(split, n, seed, rows_per_group):
     Returns [(file, row_group, [row indices]), ...] grouped by file.
     """
     fs = HfFileSystem()
-    files = sorted(fs.glob(f"datasets/{DATASET_ID}/data/{split}-*.parquet"))
+    files = sorted(fs.glob(f"datasets/{dataset_id}/data/{split}-*.parquet"))
     if not files:
         raise RuntimeError(f"No parquet files found for split {split!r}")
 
     groups = []  # (file, row_group_index, num_rows)
     for path in tqdm(files, desc=f"{split}: reading footers"):
-        # Small block size: only the footer is read here, not a multi-MB block.
+        # Small block size: only the footer is read here
         with fs.open(path, "rb", block_size=1 << 16) as fh:
             metadata = pq.ParquetFile(fh).metadata
             groups += [(path, g, metadata.row_group(g).num_rows) for g in range(metadata.num_row_groups)]
@@ -68,7 +55,7 @@ def _plan_subset(split, n, seed, rows_per_group):
 
 
 def _download_rows(plan, split):
-    """Yield the planned rows, downloading only the chosen row groups (HTTP range requests)."""
+    """Yield the planned rows, downloading only the chosen row groups."""
     fs = HfFileSystem()
     by_file = defaultdict(list)
     for path, g, indices in plan:
@@ -83,17 +70,10 @@ def _download_rows(plan, split):
                     progress.update(1)
 
 
-def _build_subset(split, n, seed, rows_per_group, out_dir):
+def _build_subset(dataset_id, split, n, seed, rows_per_group, out_dir):
     """
-    Stream the planned rows straight to disk.
-
-    Dataset.from_generator writes in small batches and fingerprints the (small)
-    plan, so the rows are never held as one in-memory Arrow table. That avoids
-    the 2 GB "offset overflow" Arrow raised when Dataset.from_list pickled the
-    whole table. Build in a temporary folder and rename at the end, so an
-    interrupted build never leaves a half-written subset that later runs would load.
-    """
-    plan = _plan_subset(split, n, seed, rows_per_group)
+    Stream the planned rows straight to disk.    """
+    plan = _plan_subset(dataset_id, split, n, seed, rows_per_group)
     tmp_cache, partial = out_dir + ".cache", out_dir + ".partial"
     for leftover in (tmp_cache, partial):
         shutil.rmtree(leftover, ignore_errors=True)
@@ -109,16 +89,15 @@ def _build_subset(split, n, seed, rows_per_group, out_dir):
     shutil.rmtree(tmp_cache, ignore_errors=True)
 
 
-def build_docvqa_subset(n_train=3000, n_val=500, seed=42, rows_per_group=25,
-                        subset_dir=SUBSET_DIR):
+def build_docvqa_subset(dataset_id, n_train, n_val, seed, rows_per_group, subset_dir):
     """Create (once) and load the train/val subsets from `subset_dir`."""
     train_dir = os.path.join(subset_dir, f"train_{n_train}_seed{seed}")
     val_dir = os.path.join(subset_dir, f"validation_{n_val}_seed{seed}")
 
     if not os.path.isdir(train_dir):
-        _build_subset("train", n_train, seed, rows_per_group, train_dir)
+        _build_subset(dataset_id, "train", n_train, seed, rows_per_group, train_dir)
     if not os.path.isdir(val_dir):
-        _build_subset("validation", n_val, seed, rows_per_group, val_dir)
+        _build_subset(dataset_id, "validation", n_val, seed, rows_per_group, val_dir)
 
     return load_from_disk(train_dir), load_from_disk(val_dir)
 
@@ -133,9 +112,11 @@ class DocVQACollator:
                  plus the list of all reference answers for ANLS.
     """
 
-    def __init__(self, processor, train=True, image_longest_edge=None):
+    def __init__(self, processor, answer_instruction, train=True, image_longest_edge=None):
         self.processor = processor
         self.tokenizer = processor.tokenizer
+        # Instruction appended to every question; identical in training and evaluation.
+        self.answer_instruction = answer_instruction
         self.train = train
         self.image_kwargs = {}
         if image_longest_edge is not None:
@@ -144,7 +125,7 @@ class DocVQACollator:
     def _prompt(self, question):
         messages = [{
             "role": "user",
-            "content": [{"type": "image"}, {"type": "text", "text": f"{question}\n{ANSWER_INSTRUCTION}"}],
+            "content": [{"type": "image"}, {"type": "text", "text": f"{question}\n{self.answer_instruction}"}],
         }]
         # Ends with "Assistant:"
         return self.processor.apply_chat_template(messages, add_generation_prompt=True)
@@ -179,23 +160,18 @@ class DocVQACollator:
         return batch
 
 
-def prepare_docvqa_dataset(model_id=MODEL_ID, n_train=3000, n_val=500, seed=42,
-                           image_longest_edge=None):
+def prepare_docvqa_dataset(model_id, dataset_id, n_train, n_val, seed, rows_per_group,
+                           subset_dir, image_longest_edge, answer_instruction):
     """
     Returns (train_dataset, val_dataset, processor, train_collator, eval_collator).
     Datasets hold raw rows; pass the collators to DataLoader(collate_fn=...).
     """
     processor = AutoProcessor.from_pretrained(model_id)
-    train_dataset, val_dataset = build_docvqa_subset(n_train, n_val, seed)
+    train_dataset, val_dataset = build_docvqa_subset(dataset_id, n_train, n_val, seed,
+                                                     rows_per_group, subset_dir)
 
-    train_collator = DocVQACollator(processor, train=True,
+    train_collator = DocVQACollator(processor, answer_instruction, train=True,
                                     image_longest_edge=image_longest_edge)
-    eval_collator = DocVQACollator(processor, train=False,
+    eval_collator = DocVQACollator(processor, answer_instruction, train=False,
                                    image_longest_edge=image_longest_edge)
     return train_dataset, val_dataset, processor, train_collator, eval_collator
-
-
-if __name__ == "__main__":
-    train_data, val_data, *_ = prepare_docvqa_dataset()
-    print(f"Train subset size: {len(train_data)}")
-    print(f"Validation subset size: {len(val_data)}")

@@ -1,0 +1,59 @@
+#   python main.py --method zeroshot | lora | adalora
+#   python main.py --compare
+
+seed: 42
+paths:
+  storage_root: /mnt/ext_drive/sasindi_rs/adalora_vlm
+  hf_home: null            # null -> {storage_root}/hf_cache
+  output_root: null        # null -> {storage_root}/runs
+  subset_dir: null         # null -> {storage_root}/data/docvqa_subset
+
+model:
+  model_id: HuggingFaceTB/SmolVLM-256M-Instruct
+  dtype: float32           # fp32 master weights keep fp16 autocast + GradScaler safe on a T4
+  attn_implementation: sdpa
+
+data:
+  dataset_id: HuggingFaceM4/DocumentVQA
+  n_train: 3000
+  n_val: 500
+  rows_per_group: 25       # rows sampled per parquet row group when building the subset
+  image_longest_edge: null # null -> processor default
+  # Standard DocVQA instruction (short answers, as ANLS expects); used in training and eval.
+  answer_instruction: "Answer the question using a single word or phrase."
+
+train:                     # identical for LoRA and AdaLoRA
+  epochs: 3
+  batch_size: 2
+  grad_accum: 8            # effective batch 16
+  lr: 2.0e-4
+  weight_decay: 0.0
+  warmup_ratio: 0.05
+  max_grad_norm: 1.0
+  precision: auto          # auto -> bf16 if supported (3090) else fp16 (T4); or bf16 / fp16 / fp32
+  num_workers: 4           # also used by the eval DataLoader
+  log_every: 10            # optimizer steps
+  save_every: 100          # optimizer steps
+  alloc_log_every: 20      # optimizer steps; must be a multiple of adalora.deltaT
+
+lora:                      # lora.r == adalora.target_r -> same final rank budget
+  r: 8
+  alpha: 16
+  dropout: 0.05
+
+adalora:
+  init_r: 12
+  target_r: 8
+  tinit_frac: 0.1          # warm-up (no pruning) as a fraction of total steps
+  tfinal_frac: 0.2         # final frozen-allocation phase as a fraction of total steps
+  deltaT: 10               # re-allocate every deltaT optimizer steps
+  beta1: 0.85
+  beta2: 0.85
+  orth_reg_weight: 0.1
+  alpha: 16
+  dropout: 0.05
+
+eval:
+  batch_size: 8
+  max_new_tokens: 32
+  anls_threshold: 0.5
