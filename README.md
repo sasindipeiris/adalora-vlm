@@ -30,9 +30,9 @@ The experiment finetunes `SmolVLM-256M-Instruct` on a 3,000 example `DocVQA` sub
 
 Untuned, LoRA and AdaLoRA use the shared config (`lr = 2e-4`). The AdaLoRA (lr 3e-4) row comes from a separate run that differs only in the learning rate. All rows use seed 42 and the same 500 validation questions.
 
-The **allocation ratios** highlight how AdaLoRA shifts its parameter budget between the vision, text, and connector parts compared to a standard baseline `(Ratio = AdaLoRA Parameters / Standard LoRA Parameters)`.
+The **allocation ratios** highlight how AdaLoRA shifts its parameter budget between the vision, text, and connector parts compared to a standard baseline `(Ratio = AdaLoRA Parameters / Standard LoRA Parameters)`.The **depth correlation ($\rho$)** indicates whether the model prefers putting those parameters in its later layers `(ρ > 0 means Deeper layers)` or its earlier layers `(ρ < 0 means Shallower layers)`.
 
-The **depth correlation ($\rho$)** indicates whether the model prefers putting those parameters in its later layers `(ρ > 0 means Deeper layers)` or its earlier layers `(ρ < 0 means Shallower layers)`.
+<img src="figures/anls.png" width="400" align="right" alt="ANLS Chart">
 
 | Method            | ANLS      | 95% CI      | Trainable params | Vision ratio | Connector ratio | Text ratio | Text / vision | ρ depth (vision) | ρ depth (text) |
 | ----------------- | --------- | ----------- | ---------------- | ------------ | --------------- | ---------- | ------------- | ---------------- | -------------- |
@@ -84,7 +84,55 @@ Each run writes to `{output_root}/{method}_seed{seed}/`:
 - **Changing the seed** produces a different data subset, a different shuffle order and new folder names (`*_seed{N}`). Run `--compare` for each seed.
 - **Custom configs** must keep `train.alloc_log_every` a multiple of `adalora.deltaT`, or the trainer raises an error.
 
+
 ### Discussion & Conclusion
+
+The core conceptual claim of the AdaLoRA paper is that importance aware budget allocation outperforms static rank assignment under constrained parameter budgets. In our VLM adaptation, we evaluated how the original paper's findings transferred to the multimodal domain:
+
+| AdaLoRA paper claim | Holds for this VLM? |
+|---|---|
+| Importance scores give a structured and non-uniform allocation | ✅ **Yes**, and the allocation barely changes between learning rates (ρ = 0.95) |
+| Upper layers need more rank than lower ones | ✅ **Vision encoder** (ρ = 0.96)<br>❌ **Text decoder** (its last layers are pruned) |
+| FFN and $W_o$/$W_v$ matter more than $W_q$/$W_k$ | ✅ **Both towers**, most sharply in the vision encoder |
+| AdaLoRA beats LoRA at the same budget | ❌ **Not here:** 2.6–3.5 ANLS points behind |
+
+While AdaLoRA did not beat LoRA in overall accuracy, the dynamic allocation mechanism functioned exactly as intended revealing deeper insights into how the VLM prioritizes different components.
+
+#### 1. Rank allocation by modality 
+<p align="center">
+  <img src="figures/budget_ratio.png" width="45%">
+  <img src="figures/adalora_budget_history.png" width="45%">
+</p>
+
+As training progressed, AdaLoRA shifted the parameter budget across towers. AdaLoRA finds that low level SigLIP features need almost no change for document analysis. Instead, it shifts the budget into the upper vision layers, the multimodal connector (reaching its maximum 1.50x initial share) and the middle of the language model. 
+
+#### 2. Rank allocation by depth
+<p align="center">
+  <img src="figures/adalora_depth_profile.png" width="45%">
+  <img src="figures/adalora_rank_heatmap.png" width="45%">
+</p>
+
+The layer wise distribution confirms that not all layers are equally important, but reveals a clear architectural split:
+*   **Vision Encoder (Follows Paper):** Exhibits a strong positive correlation with depth (ρ = 0.96). Query/Key matrices in layers 0–5 are pruned almost to zero, while upper layer FFN, Value, and Output projections stay at or near full rank.
+*   **Text Decoder (Breaks Pattern):** Shows a negative correlation with depth. Most modules in layers 0–22 stay near full rank, while layers 23–29 are heavily pruned. This likely occurs because the text tower is an autoregressive *generative decoder*, whereas the original paper exclusively studied *encoder-only* models.
+
+#### 3. Matrix Type Preferences
+<p align="center">
+  <img src="figures/adalora_matrix_types.png" width="60%">
+</p>
+
+Within the modules, AdaLoRA consistently prioritized Feed-Forward Networks (`ffn_in`, `ffn_out`) and output/value projections over Attention query/key matrices (`attn_q`, `k`) across both towers, mirroring the original paper's findings. This pruning was most aggressive in the vision encoder.
+
+#### 4. The Optimization Problem
+The paper's accuracy claim does not hold in these runs this is an **optimization problem**, rather than a bad rank allocation. AdaLoRA loses the most ground on questions the untuned model could not answer at all (precisely the questions that require the most active learning) .
+
+This is evidenced by AdaLoRA's training loss plateauing at ~0.20 (versus 0.06 for LoRA) and its weight updates being 7–15× smaller. Three causes are likely responsible for this bottleneck:
+1. **Insufficient Steps:** `lora_E` starts at zero, and Adam moves each singular value by only about the learning rate per step. 564 total steps are simply not enough to build up large updates.
+2. **Scaling Discrepancy:** AdaLoRA's updates are mathematically scaled down 1.5× relative to LoRA's.
+3. **Missing Regularization:** The orthogonality regularizer designed to keep matrices A and B near orthonormal was never active during this run.
+
+#### Conclusion
+AdaLoRA successfully demonstrated its adaptive capabilities by identifying and shifting capacity to the connector, deeper vision layers, and FFNs. The logical structure of the rank allocation suggests that with an extended training schedule and corrected regularization, the method holds strong potential for multimodal architectures.
 
 ### Further Development
 
