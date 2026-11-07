@@ -3,7 +3,9 @@
 
 seed: 42
 paths:
-  storage_root: /mnt/ext_drive/sasindi_rs/adalora_vlm
+  # Relative to the project root. Either let it be created as a normal directory, or
+  # point it at another drive first:  ln -s /path/to/big/disk out
+  storage_root: out
   hf_home: null            # null -> {storage_root}/hf_cache
   output_root: null        # null -> {storage_root}/runs
   subset_dir: null         # null -> {storage_root}/data/docvqa_subset
@@ -57,3 +59,5 @@ eval:
   batch_size: 8
   max_new_tokens: 32
   anls_threshold: 0.5
+
+

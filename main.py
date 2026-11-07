@@ -14,8 +14,8 @@ import time
 import yaml
 
 METHODS = ("zeroshot", "lora", "adalora")
-DEFAULT_CONFIG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "configs", "config.yaml")
-
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_CONFIG = os.path.join(PROJECT_DIR, "configs", "config.yaml")
 
 def parse_args():
     p = argparse.ArgumentParser()
@@ -28,15 +28,26 @@ def parse_args():
     return args
 
 
+def _resolve(path):
+    """Expand ~ and $VARS; relative paths are taken from the project directory."""
+    path = os.path.expandvars(os.path.expanduser(path))
+    return os.path.normpath(os.path.join(PROJECT_DIR, path))
+
+
 def load_config(path):
-    """Read the YAML and fill unset paths from paths.storage_root."""
+    """
+    Read the YAML and fill unset paths from the storage root
+    (default ./adalora_vlm in the project root: a plain directory or a symlink).
+    """
     with open(path) as f:
         cfg = yaml.safe_load(f)
     paths = cfg["paths"]
-    root = paths["storage_root"]
-    paths["hf_home"] = paths.get("hf_home") or os.path.join(root, "hf_cache")
-    paths["output_root"] = paths.get("output_root") or os.path.join(root, "runs")
-    paths["subset_dir"] = paths.get("subset_dir") or os.path.join(root, "data", "docvqa_subset")
+    root = _resolve(paths.get("storage_root") or "adalora_vlm")
+    paths["storage_root"] = root
+    defaults = {"hf_home": "hf_cache", "output_root": "runs",
+                "subset_dir": os.path.join("data", "docvqa_subset")}
+    for key, sub in defaults.items():
+        paths[key] = _resolve(paths[key]) if paths.get(key) else os.path.join(root, sub)
     return cfg
 
 
